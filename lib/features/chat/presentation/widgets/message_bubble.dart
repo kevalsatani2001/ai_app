@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:my_ai_app/core/theme/app_theme.dart';
 import 'package:my_ai_app/features/chat/domain/entities/chat_message.dart';
+import 'package:my_ai_app/features/chat/presentation/widgets/markdown_message_body.dart';
+import 'package:my_ai_app/features/chat/presentation/widgets/message_media_attachments.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/streaming_shimmer_bubble.dart';
 
 class MessageBubble extends StatelessWidget {
@@ -24,15 +26,14 @@ class MessageBubble extends StatelessWidget {
     }
 
     final isUser = message.isUser;
-    final alignment = isUser ? Alignment.centerRight : Alignment.centerLeft;
     final timeLabel = DateFormat('h:mm a').format(message.timestamp);
 
     return Align(
-      alignment: alignment,
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: EdgeInsets.only(
-          left: isUser ? 64 : 16,
-          right: isUser ? 16 : 64,
+          left: isUser ? 48 : 16,
+          right: isUser ? 16 : 48,
           bottom: 12,
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -43,8 +44,6 @@ class MessageBubble extends StatelessWidget {
                     AppTheme.userGradientStart,
                     AppTheme.userGradientEnd,
                   ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
                 )
               : null,
           color: isUser ? null : AppTheme.modelBubbleColor,
@@ -65,32 +64,36 @@ class MessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SelectableText.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: message.text,
-                    style: GoogleFonts.inter(
-                      color: Colors.white,
-                      fontSize: 15,
-                      height: 1.45,
-                    ),
-                  ),
-                  if (isStreaming && message.text.isEmpty)
-                    const WidgetSpan(child: SizedBox(width: 2)),
-                  if (isStreaming)
-                    WidgetSpan(
-                      alignment: PlaceholderAlignment.middle,
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 2),
-                        child: isStreaming && message.text.isNotEmpty
-                            ? const TypingCursor()
-                            : const SizedBox.shrink(),
-                      ),
-                    ),
-                ],
+            if (message.hasMedia)
+              MessageMediaAttachments(
+                mediaPaths: message.mediaPaths,
+                isUserBubble: isUser,
               ),
-            ),
+            if (isUser && message.text.trim().isNotEmpty)
+              SelectableText(
+                message.text,
+                style: GoogleFonts.inter(
+                  color: Colors.white,
+                  fontSize: 15,
+                  height: 1.45,
+                ),
+              )
+            else if (!isUser && message.text.trim().isNotEmpty)
+              MarkdownMessageBody(
+                key: ValueKey('md_${message.id}_${message.text.length}'),
+                data: message.text,
+                isStreaming: isStreaming,
+              )
+            else if (isStreaming)
+              Text(
+                '...',
+                style: GoogleFonts.inter(color: Colors.white54, fontSize: 15),
+              ),
+            if (isStreaming && !isUser && message.text.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: TypingCursor(),
+              ),
             const SizedBox(height: 6),
             Text(
               timeLabel,

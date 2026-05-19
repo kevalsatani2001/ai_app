@@ -7,5 +7,9 @@ abstract class ChatRepository {
 
   Future<void> clearChatHistory();
 
-  Stream<String> sendPromptStream(String prompt, List<ChatMessage> history);
+  Stream<String> sendMultimodalStream({
+    required String prompt,
+    required List<ChatMessage> history,
+    required List<String> attachmentPaths,
+  });
 }

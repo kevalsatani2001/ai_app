@@ -1,7 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:my_ai_app/core/error/failures.dart';
+import 'package:my_ai_app/core/services/attachment_storage_service.dart';
 import 'package:my_ai_app/features/chat/domain/entities/chat_message.dart';
 import 'package:my_ai_app/features/chat/domain/repositories/chat_repository.dart';
 import 'package:my_ai_app/features/chat/presentation/bloc/chat_event.dart';
@@ -11,25 +10,24 @@ import 'package:uuid/uuid.dart';
 class ChatBloc extends Bloc<ChatEvent, ChatState> {
   ChatBloc({
     required ChatRepository repository,
+    required AttachmentStorageService attachmentStorage,
     Uuid uuid = const Uuid(),
   })  : _repository = repository,
+        _attachmentStorage = attachmentStorage,
         _uuid = uuid,
         super(const ChatInitial()) {
     on<LoadChatHistory>(_onLoadChatHistory);
-    on<SendPrompt>(_onSendPrompt);
-    on<ReceiveStreamChunk>(_onReceiveStreamChunk);
-    on<ChatStreamError>(_onChatStreamError);
+    on<PickAttachment>(_onPickAttachment);
+    on<RemoveSelectedAttachment>(_onRemoveSelectedAttachment);
+    on<SendMultimodalPrompt>(_onSendMultimodalPrompt);
     on<ClearChatError>(_onClearChatError);
     on<ClearChatHistory>(_onClearChatHistory);
-    on<StreamStarted>(_onStreamStarted);
-    on<StreamCompleted>(_onStreamCompleted);
   }
 
   final ChatRepository _repository;
+  final AttachmentStorageService _attachmentStorage;
   final Uuid _uuid;
 
-  StreamSubscription<String>? _streamSubscription;
-  String? _activeModelMessageId;
   List<ChatMessage> _messages = const [];
 
   Future<void> _onLoadChatHistory(
@@ -45,102 +43,99 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         ),
       );
     } on Failure catch (failure) {
-      emit(
-        ChatStateActive(
-          messages: const [],
-          errorMessage: failure.message,
-        ),
-      );
+      emit(ChatStateActive(messages: const [], errorMessage: failure.message));
     } catch (error) {
       emit(
         ChatStateActive(
           messages: const [],
-          errorMessage: 'Unable to load chat history: $error',
+          errorMessage: 'Unable to load history: $error',
         ),
       );
     }
   }
 
-  Future<void> _onSendPrompt(
-    SendPrompt event,
+  Future<void> _onPickAttachment(
+    PickAttachment event,
     Emitter<ChatState> emit,
   ) async {
-    final trimmedPrompt = event.text.trim();
-    if (trimmedPrompt.isEmpty) {
+    final current = state;
+    if (current is! ChatStateActive || current.isStreaming) {
       return;
     }
 
-    final currentState = state;
-    if (currentState is ChatStateActive && currentState.isStreaming) {
+    try {
+      final picked = await _attachmentStorage.pickAttachments(event.type);
+      if (picked.isEmpty) {
+        return;
+      }
+      emit(
+        current.copyWith(
+          selectedFiles: [...current.selectedFiles, ...picked],
+          clearError: true,
+        ),
+      );
+    } on Failure catch (failure) {
+      emit(current.copyWith(errorMessage: failure.message));
+    } catch (error) {
+      emit(current.copyWith(errorMessage: 'Pick failed: $error'));
+    }
+  }
+
+  void _onRemoveSelectedAttachment(
+    RemoveSelectedAttachment event,
+    Emitter<ChatState> emit,
+  ) {
+    final current = state;
+    if (current is! ChatStateActive) {
       return;
     }
 
+    emit(
+      current.copyWith(
+        selectedFiles: current.selectedFiles
+            .where((f) => f.path != event.filePath)
+            .toList(),
+      ),
+    );
+  }
+
+  Future<void> _onSendMultimodalPrompt(
+    SendMultimodalPrompt event,
+    Emitter<ChatState> emit,
+  ) async {
+    final current = state;
+    if (current is! ChatStateActive || current.isStreaming) {
+      return;
+    }
+
+    final prompt = event.text.trim();
+    final hasFiles = current.selectedFiles.isNotEmpty;
+    if (prompt.isEmpty && !hasFiles) {
+      return;
+    }
+
+    final mediaPaths = current.selectedFiles.map((f) => f.path).toList();
     final userMessage = ChatMessage(
       id: _uuid.v4(),
       role: 'user',
-      text: trimmedPrompt,
+      text: prompt,
       timestamp: DateTime.now(),
+      mediaPaths: mediaPaths,
     );
-
-    final modelMessageId = _uuid.v4();
+    final modelId = _uuid.v4();
 
     try {
       await _repository.saveMessage(userMessage);
     } on Failure catch (failure) {
-      emit(
-        _activeStateOrEmpty().copyWith(errorMessage: failure.message),
-      );
-      return;
-    } catch (error) {
-      emit(
-        _activeStateOrEmpty().copyWith(
-          errorMessage: 'Failed to save your message: $error',
-        ),
-      );
+      emit(current.copyWith(errorMessage: failure.message));
       return;
     }
 
-    add(
-      StreamStarted(
-        userMessage: userMessage,
-        modelMessageId: modelMessageId,
-      ),
-    );
-
-    await _streamSubscription?.cancel();
-    _activeModelMessageId = modelMessageId;
-
-    // Pass prior turns only; the new prompt is sent separately (avoids duplicate).
-    final priorHistory = List<ChatMessage>.from(_messages);
-
-    _streamSubscription = _repository
-        .sendPromptStream(trimmedPrompt, priorHistory)
-        .listen(
-      (String chunk) {
-        add(ReceiveStreamChunk(chunk));
-      },
-      onError: (Object error) {
-        final message = error is Failure
-            ? error.message
-            : 'Streaming failed: $error';
-        add(ChatStreamError(message));
-      },
-      onDone: () {
-        add(const StreamCompleted());
-      },
-      cancelOnError: true,
-    );
-  }
-
-  void _onStreamStarted(
-    StreamStarted event,
-    Emitter<ChatState> emit,
-  ) {
     _messages = [
       ..._messages,
-      event.userMessage,
+      userMessage,
       ChatMessage(
-        id: event.modelMessageId,
+        id: modelId,
         role: 'model',
         text: '',
         timestamp: DateTime.now(),
@@ -150,127 +145,109 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     emit(
       ChatStateActive(
         messages: List<ChatMessage>.unmodifiable(_messages),
+        selectedFiles: const [],
         isStreaming: true,
-        streamingMessageId: event.modelMessageId,
+        streamingMessageId: modelId,
+        errorMessage: null,
       ),
     );
-  }
 
-  void _onReceiveStreamChunk(
-    ReceiveStreamChunk event,
-    Emitter<ChatState> emit,
-  ) {
-    final modelMessageId = _activeModelMessageId;
-    if (modelMessageId == null) {
-      return;
-    }
+    final priorHistory = List<ChatMessage>.from(_messages)
+      ..removeWhere((m) => m.id == modelId)
+      ..removeWhere((m) => m.id == userMessage.id);
 
-    final messageIndex = _messages.indexWhere(
-      (message) => message.id == modelMessageId,
-    );
-    if (messageIndex == -1) {
-      return;
-    }
+    try {
+      await for (final chunk in _repository.sendMultimodalStream(
+        prompt: prompt,
+        history: priorHistory,
+        attachmentPaths: mediaPaths,
+      )) {
+        final index = _messages.indexWhere((m) => m.id == modelId);
+        if (index == -1) {
+          continue;
+        }
 
-    final currentMessage = _messages[messageIndex];
-    final updatedMessage = currentMessage.copyWith(
-      text: currentMessage.text + event.chunk,
-    );
+        _messages = List<ChatMessage>.from(_messages);
+        _messages[index] = _messages[index].copyWith(
+          text: _messages[index].text + chunk,
+        );
 
-    _messages = List<ChatMessage>.from(_messages);
-    _messages[messageIndex] = updatedMessage;
+        emit(
+          ChatStateActive(
+            messages: List<ChatMessage>.unmodifiable(_messages),
+            isStreaming: true,
+            streamingMessageId: modelId,
+          ),
+        );
+      }
 
-    final currentState = state;
-    if (currentState is ChatStateActive) {
+      await _finalize(emit, modelId);
+    } catch (error) {
+      _messages = List<ChatMessage>.from(_messages)
+        ..removeWhere((m) => m.id == modelId);
+
+      final msg = error is Failure ? error.message : '$error';
       emit(
-        currentState.copyWith(
+        ChatStateActive(
           messages: List<ChatMessage>.unmodifiable(_messages),
+          isStreaming: false,
+          errorMessage: msg,
         ),
       );
     }
   }
 
-  Future<void> _onStreamCompleted(
-    StreamCompleted event,
-    Emitter<ChatState> emit,
-  ) async {
-    final modelMessageId = _activeModelMessageId;
-    _activeModelMessageId = null;
-    _streamSubscription = null;
-
-    if (modelMessageId != null) {
-      final messageIndex = _messages.indexWhere(
-        (message) => message.id == modelMessageId,
+  Future<void> _finalize(Emitter<ChatState> emit, String modelId) async {
+    final index = _messages.indexWhere((m) => m.id == modelId);
+    if (index == -1) {
+      emit(
+        ChatStateActive(
+          messages: List<ChatMessage>.unmodifiable(_messages),
+          isStreaming: false,
+        ),
       );
-      if (messageIndex != -1) {
-        final finalizedMessage = _messages[messageIndex];
-        if (finalizedMessage.text.trim().isNotEmpty) {
-          try {
-            await _repository.saveMessage(finalizedMessage);
-          } on Failure catch (failure) {
-            emit(
-              _activeStateOrEmpty().copyWith(
-                isStreaming: false,
-                clearStreamingMessageId: true,
-                errorMessage: failure.message,
-              ),
-            );
-            return;
-          } catch (error) {
-            emit(
-              _activeStateOrEmpty().copyWith(
-                isStreaming: false,
-                clearStreamingMessageId: true,
-                errorMessage: 'Failed to persist AI response: $error',
-              ),
-            );
-            return;
-          }
-        } else {
-          _messages = List<ChatMessage>.from(_messages)..removeAt(messageIndex);
-        }
-      }
+      return;
+    }
+
+    final modelMsg = _messages[index];
+    if (modelMsg.text.trim().isEmpty) {
+      _messages = List<ChatMessage>.from(_messages)..removeAt(index);
+      emit(
+        ChatStateActive(
+          messages: List<ChatMessage>.unmodifiable(_messages),
+          isStreaming: false,
+          errorMessage: 'No response from Gemini.',
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _repository.saveMessage(modelMsg);
+    } on Failure catch (failure) {
+      emit(
+        ChatStateActive(
+          messages: List<ChatMessage>.unmodifiable(_messages),
+          isStreaming: false,
+          errorMessage: failure.message,
+        ),
+      );
+      return;
     }
 
     emit(
       ChatStateActive(
         messages: List<ChatMessage>.unmodifiable(_messages),
         isStreaming: false,
+        streamingMessageId: null,
       ),
     );
   }
 
-  Future<void> _onChatStreamError(
-    ChatStreamError event,
-    Emitter<ChatState> emit,
-  ) async {
-    await _streamSubscription?.cancel();
-    _streamSubscription = null;
-
-    final modelMessageId = _activeModelMessageId;
-    _activeModelMessageId = null;
-
-    if (modelMessageId != null) {
-      _messages = List<ChatMessage>.from(_messages)
-        ..removeWhere((message) => message.id == modelMessageId);
-    }
-
-    emit(
-      ChatStateActive(
-        messages: List<ChatMessage>.unmodifiable(_messages),
-        isStreaming: false,
-        errorMessage: event.error,
-      ),
-    );
-  }
-
-  void _onClearChatError(
-    ClearChatError event,
-    Emitter<ChatState> emit,
-  ) {
-    final currentState = state;
-    if (currentState is ChatStateActive) {
-      emit(currentState.copyWith(clearError: true));
+  void _onClearChatError(ClearChatError event, Emitter<ChatState> emit) {
+    final current = state;
+    if (current is ChatStateActive) {
+      emit(current.copyWith(clearError: true));
     }
   }
 
@@ -278,43 +255,20 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     ClearChatHistory event,
     Emitter<ChatState> emit,
   ) async {
-    await _streamSubscription?.cancel();
-    _streamSubscription = null;
-    _activeModelMessageId = null;
-
     try {
       await _repository.clearChatHistory();
       _messages = const [];
-      emit(
-        const ChatStateActive(
-          messages: [],
-          isStreaming: false,
-        ),
-      );
+      emit(const ChatStateActive(messages: []));
     } on Failure catch (failure) {
-      emit(
-        _activeStateOrEmpty().copyWith(errorMessage: failure.message),
-      );
-    } catch (error) {
-      emit(
-        _activeStateOrEmpty().copyWith(
-          errorMessage: 'Failed to clear chat history: $error',
-        ),
-      );
+      emit(_active().copyWith(errorMessage: failure.message));
     }
   }
 
-  ChatStateActive _activeStateOrEmpty() {
-    final currentState = state;
-    if (currentState is ChatStateActive) {
-      return currentState;
+  ChatStateActive _active() {
+    final current = state;
+    if (current is ChatStateActive) {
+      return current;
     }
     return ChatStateActive(messages: List<ChatMessage>.unmodifiable(_messages));
-  }
-
-  @override
-  Future<void> close() async {
-    await _streamSubscription?.cancel();
-    return super.close();
   }
 }

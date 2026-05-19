@@ -8,6 +8,7 @@ class ChatMessageModel extends ChatMessage {
     required super.role,
     required super.text,
     required super.timestamp,
+    super.mediaPaths = const [],
   });
 
   factory ChatMessageModel.fromEntity(ChatMessage entity) {
@@ -16,6 +17,7 @@ class ChatMessageModel extends ChatMessage {
       role: entity.role,
       text: entity.text,
       timestamp: entity.timestamp,
+      mediaPaths: List<String>.from(entity.mediaPaths),
     );
   }
 
@@ -25,20 +27,7 @@ class ChatMessageModel extends ChatMessage {
       role: role,
       text: text,
       timestamp: timestamp,
-    );
-  }
-
-  ChatMessageModel copyWithModel({
-    String? id,
-    String? role,
-    String? text,
-    DateTime? timestamp,
-  }) {
-    return ChatMessageModel(
-      id: id ?? this.id,
-      role: role ?? this.role,
-      text: text ?? this.text,
-      timestamp: timestamp ?? this.timestamp,
+      mediaPaths: List<String>.from(mediaPaths),
     );
   }
 }
@@ -53,11 +42,18 @@ class ChatMessageAdapter extends TypeAdapter<ChatMessageModel> {
     final role = reader.readString();
     final text = reader.readString();
     final timestamp = DateTime.fromMillisecondsSinceEpoch(reader.readInt());
+    final mediaCount = reader.readInt();
+    final mediaPaths = List<String>.generate(
+      mediaCount,
+      (_) => reader.readString(),
+    );
+
     return ChatMessageModel(
       id: id,
       role: role,
       text: text,
       timestamp: timestamp,
+      mediaPaths: mediaPaths,
     );
   }
 
@@ -67,5 +63,9 @@ class ChatMessageAdapter extends TypeAdapter<ChatMessageModel> {
     writer.writeString(obj.role);
     writer.writeString(obj.text);
     writer.writeInt(obj.timestamp.millisecondsSinceEpoch);
+    writer.writeInt(obj.mediaPaths.length);
+    for (final path in obj.mediaPaths) {
+      writer.writeString(path);
+    }
   }
 }

@@ -8,42 +8,38 @@ class ChatRepositoryImpl implements ChatRepository {
   ChatRepositoryImpl({
     required ChatLocalDataSource localDataSource,
     required GeminiRemoteService remoteService,
-  })  : _localDataSource = localDataSource,
-        _remoteService = remoteService;
+  })  : _local = localDataSource,
+        _remote = remoteService;
 
-  final ChatLocalDataSource _localDataSource;
-  final GeminiRemoteService _remoteService;
-
-  @override
-  Future<List<ChatMessage>> loadChatHistory() {
-    return _localDataSource.fetchAllMessagesSorted();
-  }
+  final ChatLocalDataSource _local;
+  final GeminiRemoteService _remote;
 
   @override
-  Future<void> saveMessage(ChatMessage message) {
-    return _localDataSource.saveMessage(message);
-  }
+  Future<List<ChatMessage>> loadChatHistory() => _local.fetchAllMessagesSorted();
 
   @override
-  Future<void> clearChatHistory() {
-    return _localDataSource.clearAllMessages();
-  }
+  Future<void> saveMessage(ChatMessage message) => _local.saveMessage(message);
 
   @override
-  Stream<String> sendPromptStream(
-    String prompt,
-    List<ChatMessage> history,
-  ) {
+  Future<void> clearChatHistory() => _local.clearAllMessages();
+
+  @override
+  Stream<String> sendMultimodalStream({
+    required String prompt,
+    required List<ChatMessage> history,
+    required List<String> attachmentPaths,
+  }) {
     try {
-      _remoteService.initializeSession(history);
-      return _remoteService.sendMessageStream(prompt);
+      _remote.initializeSession(history);
+      return _remote.sendMessageStream(
+        prompt: prompt,
+        attachmentPaths: attachmentPaths,
+      );
     } catch (error) {
       if (error is Failure) {
         return Stream<String>.error(error);
       }
-      return Stream<String>.error(
-        UnknownFailure('Failed to start Gemini stream: $error'),
-      );
+      return Stream<String>.error(UnknownFailure('$error'));
     }
   }
 }

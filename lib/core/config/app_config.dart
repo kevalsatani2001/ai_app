@@ -3,14 +3,26 @@ class AppConfig {
 
   static const String geminiModel = 'gemini-2.5-flash';
 
-  static const String hiveChatBoxName = 'chat_messages_box';
+  /// New box for multimodal messages (avoids corrupting old text-only data).
+  static const String hiveChatBoxName = 'chat_multimodal_v1';
 
-  static const int chatMessageTypeId = 0;
+  static const int chatMessageTypeId = 1;
 
-  /// Prefer passing the key at build time:
-  /// flutter run --dart-define=GEMINI_API_KEY=your_key
+  static const int maxAttachmentBytes = 20 * 1024 * 1024;
+
+  static const List<String> allowedImageExtensions = [
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'gif',
+    'heic',
+  ];
+
+  static const List<String> allowedPdfExtensions = ['pdf'];
+
   static const String geminiApiKey = String.fromEnvironment(
     'GEMINI_API_KEY',
-    defaultValue: 'AIzaSyCU9qKHiLIpVJU_mcOkJs0RKAnWwRC8MVU',
+    defaultValue: 'GEMINI_API_KEY',
   );
 }

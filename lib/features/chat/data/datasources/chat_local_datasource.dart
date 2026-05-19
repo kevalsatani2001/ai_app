@@ -12,30 +12,40 @@ class ChatLocalDataSource {
 
   Future<List<ChatMessage>> fetchAllMessagesSorted() async {
     try {
-      final messages = _chatBox.values.toList(growable: false)
-        ..sort(
-          (ChatMessageModel a, ChatMessageModel b) =>
-              a.timestamp.compareTo(b.timestamp),
-        );
-      return messages.map((message) => message.toEntity()).toList();
+      final staleIds = <String>[];
+      final messages = <ChatMessageModel>[];
+
+      for (final message in _chatBox.values) {
+        if (message.isModel && message.text.trim().isEmpty) {
+          staleIds.add(message.id);
+          continue;
+        }
+        messages.add(message);
+      }
+
+      for (final id in staleIds) {
+        await _chatBox.delete(id);
+      }
+
+      messages.sort(
+        (a, b) => a.timestamp.compareTo(b.timestamp),
+      );
+
+      return messages.map((m) => m.toEntity()).toList();
     } catch (error) {
       throw CacheFailure('Failed to load chat history: $error');
     }
   }
 
   Future<void> saveMessage(ChatMessage message) async {
+    if (message.isModel && message.text.trim().isEmpty) {
+      return;
+    }
+
     try {
       await _chatBox.put(message.id, ChatMessageModel.fromEntity(message));
     } catch (error) {
       throw CacheFailure('Failed to save message: $error');
-    }
-  }
-
-  Future<void> deleteMessage(String messageId) async {
-    try {
-      await _chatBox.delete(messageId);
-    } catch (error) {
-      throw CacheFailure('Failed to delete message: $error');
     }
   }
 
@@ -47,14 +57,6 @@ class ChatLocalDataSource {
     }
   }
 
-  Future<bool> messageExists(String messageId) async {
-    try {
-      return _chatBox.containsKey(messageId);
-    } catch (error) {
-      throw CacheFailure('Failed to check message existence: $error');
-    }
-  }
-
   static Future<Box<ChatMessageModel>> openBox() async {
     try {
       if (!Hive.isBoxOpen(AppConfig.hiveChatBoxName)) {
@@ -62,7 +64,7 @@ class ChatLocalDataSource {
       }
       return Hive.box<ChatMessageModel>(AppConfig.hiveChatBoxName);
     } catch (error) {
-      throw CacheFailure('Failed to open Hive chat box: $error');
+      throw CacheFailure('Failed to open Hive box: $error');
     }
   }
 }

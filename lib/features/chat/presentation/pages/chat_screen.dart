@@ -7,6 +7,7 @@ import 'package:my_ai_app/features/chat/presentation/bloc/chat_bloc.dart';
 import 'package:my_ai_app/features/chat/presentation/bloc/chat_event.dart';
 import 'package:my_ai_app/features/chat/presentation/bloc/chat_state.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/ai_status_badge.dart';
+import 'package:my_ai_app/features/chat/presentation/widgets/attachment_preview_bar.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/chat_input_panel.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/error_banner.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/message_bubble.dart';
@@ -19,14 +20,15 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final TextEditingController _textController = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
-  final ScrollController _scrollController = ScrollController();
+  final _textController = TextEditingController();
+  final _focusNode = FocusNode();
+  final _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     context.read<ChatBloc>().add(const LoadChatHistory());
+    _textController.addListener(() => setState(() {}));
   }
 
   @override
@@ -37,66 +39,33 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _sendPrompt() {
-    final text = _textController.text.trim();
-    if (text.isEmpty) {
+  void _send() {
+    final text = _textController.text;
+    final state = context.read<ChatBloc>().state;
+    if (state is! ChatStateActive) {
       return;
     }
-    context.read<ChatBloc>().add(SendPrompt(text));
+    final canSend = !state.isStreaming &&
+        (text.trim().isNotEmpty || state.selectedFiles.isNotEmpty);
+    if (!canSend) {
+      return;
+    }
+    context.read<ChatBloc>().add(SendMultimodalPrompt(text));
     _textController.clear();
-    _focusNode.requestFocus();
     _scrollToBottom();
   }
 
-  void _scrollToBottom({bool animated = true}) {
+  void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) {
         return;
       }
-      final target = _scrollController.position.maxScrollExtent;
-      if (animated) {
-        _scrollController.animateTo(
-          target,
-          duration: const Duration(milliseconds: 260),
-          curve: Curves.easeOutCubic,
-        );
-      } else {
-        _scrollController.jumpTo(target);
-      }
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
     });
-  }
-
-  Future<void> _confirmClearHistory() async {
-    final shouldClear = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: AppTheme.surfaceColor,
-          title: Text(
-            'Clear conversation?',
-            style: GoogleFonts.inter(color: Colors.white),
-          ),
-          content: Text(
-            'This will permanently delete all local chat messages.',
-            style: GoogleFonts.inter(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Clear'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (shouldClear == true && mounted) {
-      context.read<ChatBloc>().add(const ClearChatHistory());
-    }
   }
 
   @override
@@ -118,29 +87,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(
-                Icons.auto_awesome_rounded,
-                color: Colors.white,
-                size: 18,
-              ),
+              child: const Icon(Icons.auto_awesome_rounded,
+                  color: Colors.white, size: 18),
             ),
             const SizedBox(width: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('Gemini Multimodal',
+                    style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w700, fontSize: 17)),
                 Text(
-                  'Gemini Chat',
+                  'Text · Images · PDF · Markdown',
                   style: GoogleFonts.inter(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  'Powered by gemini-2.5-flash',
-                  style: GoogleFonts.inter(
-                    fontSize: 11,
-                    color: Colors.white54,
-                  ),
+                      fontSize: 11, color: Colors.white54),
                 ),
               ],
             ),
@@ -148,32 +108,46 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           BlocSelector<ChatBloc, ChatState, bool>(
-            selector: (state) =>
-                state is ChatStateActive ? state.isStreaming : false,
-            builder: (context, isStreaming) {
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: AiStatusBadge(isStreaming: isStreaming),
-              );
-            },
+            selector: (s) => s is ChatStateActive && s.isStreaming,
+            builder: (_, streaming) => Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: AiStatusBadge(isStreaming: streaming),
+            ),
           ),
           IconButton(
-            tooltip: 'Clear chat',
-            onPressed: _confirmClearHistory,
             icon: const Icon(Icons.delete_outline_rounded),
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: AppTheme.surfaceColor,
+                  title: Text('Clear chat?',
+                      style: GoogleFonts.inter(color: Colors.white)),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('Cancel')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('Clear')),
+                  ],
+                ),
+              );
+              if (ok == true) {
+                if (!context.mounted) {
+                  return;
+                }
+                context.read<ChatBloc>().add(const ClearChatHistory());
+              }
+            },
           ),
         ],
       ),
       body: BlocConsumer<ChatBloc, ChatState>(
-        listenWhen: (previous, current) {
-          if (current is ChatStateActive && current.errorMessage != null) {
-            if (previous is! ChatStateActive) {
-              return true;
-            }
-            return previous.errorMessage != current.errorMessage;
-          }
-          return false;
-        },
+        listenWhen: (p, c) =>
+            c is ChatStateActive &&
+            c.errorMessage != null &&
+            (p is! ChatStateActive || p.errorMessage != c.errorMessage),
         listener: (context, state) {
           if (state is ChatStateActive && state.errorMessage != null) {
             ScaffoldMessenger.of(context)
@@ -183,39 +157,85 @@ class _ChatScreenState extends State<ChatScreen> {
                   content: Text(state.errorMessage!),
                   action: SnackBarAction(
                     label: 'Dismiss',
-                    onPressed: () {
-                      context.read<ChatBloc>().add(const ClearChatError());
-                    },
+                    onPressed: () =>
+                        context.read<ChatBloc>().add(const ClearChatError()),
                   ),
                 ),
               );
           }
         },
-        buildWhen: (previous, current) => previous != current,
         builder: (context, state) {
+          if (state is ChatInitial || state is ChatHistoryLoading) {
+            return const Center(
+              child: CircularProgressIndicator(color: AppTheme.accentColor),
+            );
+          }
+
+          if (state is! ChatStateActive) {
+            return const SizedBox.shrink();
+          }
+
+          final canSend = !state.isStreaming &&
+              (_textController.text.trim().isNotEmpty ||
+                  state.selectedFiles.isNotEmpty);
+
+          if (state.messages.isNotEmpty) {
+            _scrollToBottom();
+          }
+
           return Column(
             children: [
-              if (state is ChatStateActive && state.errorMessage != null)
+              if (state.errorMessage != null)
                 ErrorBanner(
                   message: state.errorMessage!,
-                  onDismiss: () {
-                    context.read<ChatBloc>().add(const ClearChatError());
-                  },
+                  onDismiss: () =>
+                      context.read<ChatBloc>().add(const ClearChatError()),
                 ),
               Expanded(
-                child: _buildMessageArea(state),
+                child: state.messages.isEmpty
+                    ? _EmptyState(onTap: (t) {
+                        _textController.text = t;
+                        _send();
+                      })
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.only(top: 16, bottom: 8),
+                        itemCount: state.messages.length,
+                        itemBuilder: (context, index) {
+                          final msg = state.messages[index];
+                          final streaming = state.isStreaming &&
+                              msg.id == state.streamingMessageId;
+                          final shimmer =
+                              streaming && msg.text.isEmpty;
+
+                          if (streaming) {
+                            return _LiveModelBubble(
+                              messageId: msg.id,
+                              showShimmer: shimmer,
+                            );
+                          }
+
+                          return MessageBubble(
+                            key: ValueKey(msg.id),
+                            message: msg,
+                            isStreaming: false,
+                            showShimmer: false,
+                          );
+                        },
+                      ),
               ),
-              BlocSelector<ChatBloc, ChatState, bool>(
-                selector: (state) =>
-                    state is ChatStateActive ? state.isStreaming : false,
-                builder: (context, isStreaming) {
-                  return ChatInputPanel(
-                    controller: _textController,
-                    focusNode: _focusNode,
-                    isStreaming: isStreaming,
-                    onSend: _sendPrompt,
-                  );
-                },
+              AttachmentPreviewBar(
+                files: state.selectedFiles,
+                onRemove: (path) => context
+                    .read<ChatBloc>()
+                    .add(RemoveSelectedAttachment(path)),
+              ),
+              ChatInputPanel(
+                controller: _textController,
+                focusNode: _focusNode,
+                isStreaming: state.isStreaming,
+                canSend: canSend,
+                onSend: _send,
               ),
             ],
           );
@@ -223,64 +243,15 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
-
-  Widget _buildMessageArea(ChatState state) {
-    if (state is ChatInitial || state is ChatHistoryLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppTheme.accentColor),
-      );
-    }
-
-    if (state is! ChatStateActive) {
-      return const SizedBox.shrink();
-    }
-
-    final messages = state.messages;
-    if (messages.isEmpty) {
-      return _EmptyChatState(onSuggestionTap: (value) {
-        _textController.text = value;
-        _sendPrompt();
-      });
-    }
-
-    _scrollToBottom(animated: state.isStreaming);
-
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.only(top: 16, bottom: 8),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final message = messages[index];
-        final isStreamingMessage =
-            state.isStreaming && message.id == state.streamingMessageId;
-        final showShimmer =
-            isStreamingMessage && message.text.isEmpty;
-
-        if (isStreamingMessage) {
-          return _StreamingMessageBubble(
-            message: message,
-            showShimmer: showShimmer,
-          );
-        }
-
-        return MessageBubble(
-          key: ValueKey(message.id),
-          message: message,
-          isStreaming: false,
-          showShimmer: false,
-        );
-      },
-    );
-  }
 }
 
-class _StreamingMessageBubble extends StatelessWidget {
-  const _StreamingMessageBubble({
-    required this.message,
+class _LiveModelBubble extends StatelessWidget {
+  const _LiveModelBubble({
+    required this.messageId,
     required this.showShimmer,
   });
 
-  final ChatMessage message;
+  final String messageId;
   final bool showShimmer;
 
   @override
@@ -290,19 +261,16 @@ class _StreamingMessageBubble extends StatelessWidget {
         if (state is! ChatStateActive) {
           return null;
         }
-        final index = state.messages.indexWhere(
-          (entry) => entry.id == message.id,
-        );
-        if (index == -1) {
-          return null;
-        }
-        return state.messages[index];
+        final i = state.messages.indexWhere((m) => m.id == messageId);
+        return i == -1 ? null : state.messages[i];
       },
-      builder: (context, liveMessage) {
-        final resolvedMessage = liveMessage ?? message;
+      builder: (context, msg) {
+        if (msg == null) {
+          return const SizedBox.shrink();
+        }
         return MessageBubble(
-          key: ValueKey('${resolvedMessage.id}_stream'),
-          message: resolvedMessage,
+          key: ValueKey('live_$messageId'),
+          message: msg,
           isStreaming: true,
           showShimmer: showShimmer,
         );
@@ -311,53 +279,30 @@ class _StreamingMessageBubble extends StatelessWidget {
   }
 }
 
-class _EmptyChatState extends StatelessWidget {
-  const _EmptyChatState({required this.onSuggestionTap});
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.onTap});
 
-  final ValueChanged<String> onSuggestionTap;
+  final ValueChanged<String> onTap;
 
   @override
   Widget build(BuildContext context) {
-    final suggestions = [
-      'Explain quantum computing simply',
-      'Write a Flutter widget for a gradient button',
-      'Plan a 3-day trip to Tokyo',
+    const tips = [
+      'Explain this image',
+      'Summarize this PDF',
+      'Write Flutter code for a login screen',
     ];
 
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 28),
+        padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [
-                    AppTheme.userGradientStart,
-                    AppTheme.userGradientEnd,
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppTheme.accentColor.withValues(alpha: 0.35),
-                    blurRadius: 24,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.auto_awesome_rounded,
-                color: Colors.white,
-                size: 34,
-              ),
-            ),
-            const SizedBox(height: 22),
+            const Icon(Icons.auto_awesome_rounded,
+                size: 56, color: AppTheme.accentColor),
+            const SizedBox(height: 16),
             Text(
-              'Start a conversation',
+              'Multimodal Gemini Chat',
               style: GoogleFonts.inter(
                 color: Colors.white,
                 fontSize: 22,
@@ -366,26 +311,21 @@ class _EmptyChatState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Your messages are saved locally and streamed live from Gemini.',
+              'Send text, photos, or PDFs. Replies render with Markdown.',
               textAlign: TextAlign.center,
-              style: GoogleFonts.inter(
-                color: Colors.white54,
-                fontSize: 14,
-                height: 1.5,
-              ),
+              style: GoogleFonts.inter(color: Colors.white54, height: 1.5),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
             Wrap(
-              spacing: 10,
-              runSpacing: 10,
+              spacing: 8,
+              runSpacing: 8,
               alignment: WrapAlignment.center,
-              children: suggestions
+              children: tips
                   .map(
-                    (suggestion) => ActionChip(
-                      label: Text(suggestion),
-                      onPressed: () => onSuggestionTap(suggestion),
+                    (t) => ActionChip(
+                      label: Text(t),
+                      onPressed: () => onTap(t),
                       backgroundColor: AppTheme.surfaceColor,
-                      labelStyle: GoogleFonts.inter(color: Colors.white70),
                     ),
                   )
                   .toList(),

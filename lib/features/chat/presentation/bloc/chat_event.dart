@@ -1,5 +1,5 @@
 import 'package:equatable/equatable.dart';
-import 'package:my_ai_app/features/chat/domain/entities/chat_message.dart';
+import 'package:my_ai_app/features/chat/domain/entities/attachment_pick_type.dart';
 
 sealed class ChatEvent extends Equatable {
   const ChatEvent();
@@ -12,8 +12,27 @@ final class LoadChatHistory extends ChatEvent {
   const LoadChatHistory();
 }
 
-final class SendPrompt extends ChatEvent {
-  const SendPrompt(this.text);
+/// [type] maps to image vs PDF picker (FileType.custom for PDF).
+final class PickAttachment extends ChatEvent {
+  const PickAttachment(this.type);
+
+  final AttachmentPickType type;
+
+  @override
+  List<Object?> get props => [type];
+}
+
+final class RemoveSelectedAttachment extends ChatEvent {
+  const RemoveSelectedAttachment(this.filePath);
+
+  final String filePath;
+
+  @override
+  List<Object?> get props => [filePath];
+}
+
+final class SendMultimodalPrompt extends ChatEvent {
+  const SendMultimodalPrompt(this.text);
 
   final String text;
 
@@ -49,17 +68,4 @@ final class ClearChatHistory extends ChatEvent {
 
 final class StreamCompleted extends ChatEvent {
   const StreamCompleted();
-}
-
-final class StreamStarted extends ChatEvent {
-  const StreamStarted({
-    required this.userMessage,
-    required this.modelMessageId,
-  });
-
-  final ChatMessage userMessage;
-  final String modelMessageId;
-
-  @override
-  List<Object?> get props => [userMessage, modelMessageId];
 }
