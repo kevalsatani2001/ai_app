@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:equatable/equatable.dart';
 import 'package:my_ai_app/features/chat/domain/entities/chat_message.dart';
+import 'package:my_ai_app/features/chat/domain/entities/chat_session.dart';
 
 sealed class ChatState extends Equatable {
   const ChatState();
@@ -20,13 +21,19 @@ final class ChatHistoryLoading extends ChatState {
 
 final class ChatStateActive extends ChatState {
   const ChatStateActive({
+    required this.activeChatId,
+    required this.sessionTitle,
     required this.messages,
+    this.sessions = const [],
     this.selectedFiles = const [],
     this.isStreaming = false,
     this.errorMessage,
     this.streamingMessageId,
   });
 
+  final String activeChatId;
+  final String sessionTitle;
+  final List<ChatSessionSummary> sessions;
   final List<ChatMessage> messages;
   final List<File> selectedFiles;
   final bool isStreaming;
@@ -34,6 +41,9 @@ final class ChatStateActive extends ChatState {
   final String? streamingMessageId;
 
   ChatStateActive copyWith({
+    String? activeChatId,
+    String? sessionTitle,
+    List<ChatSessionSummary>? sessions,
     List<ChatMessage>? messages,
     List<File>? selectedFiles,
     bool? isStreaming,
@@ -44,6 +54,9 @@ final class ChatStateActive extends ChatState {
     bool clearStreamingMessageId = false,
   }) {
     return ChatStateActive(
+      activeChatId: activeChatId ?? this.activeChatId,
+      sessionTitle: sessionTitle ?? this.sessionTitle,
+      sessions: sessions ?? this.sessions,
       messages: messages ?? this.messages,
       selectedFiles:
           clearSelectedFiles ? const [] : selectedFiles ?? this.selectedFiles,
@@ -57,6 +70,9 @@ final class ChatStateActive extends ChatState {
 
   @override
   List<Object?> get props => [
+        activeChatId,
+        sessionTitle,
+        sessions,
         messages,
         selectedFiles,
         isStreaming,

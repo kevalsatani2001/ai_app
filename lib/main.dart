@@ -7,6 +7,7 @@ import 'package:my_ai_app/core/services/attachment_storage_service.dart';
 import 'package:my_ai_app/features/chat/data/datasources/chat_local_datasource.dart';
 import 'package:my_ai_app/features/chat/data/datasources/gemini_remote_service.dart';
 import 'package:my_ai_app/features/chat/data/models/chat_message_model.dart';
+import 'package:my_ai_app/features/chat/data/models/chat_session_model.dart';
 import 'package:my_ai_app/features/chat/data/repositories/chat_repository_impl.dart';
 import 'package:my_ai_app/features/chat/presentation/bloc/chat_bloc.dart';
 
@@ -23,9 +24,12 @@ Future<void> main() async {
   if (!Hive.isAdapterRegistered(AppConfig.chatMessageTypeId)) {
     Hive.registerAdapter(ChatMessageAdapter());
   }
+  if (!Hive.isAdapterRegistered(AppConfig.chatSessionTypeId)) {
+    Hive.registerAdapter(ChatSessionAdapter());
+  }
 
-  final chatBox = await ChatLocalDataSource.openBox();
-  final localDataSource = ChatLocalDataSource(chatBox: chatBox);
+  final sessionsBox = await ChatLocalDataSource.openBox();
+  final localDataSource = ChatLocalDataSource(sessionsBox: sessionsBox);
   final remoteService = GeminiRemoteService(apiKey: AppConfig.geminiApiKey);
   final attachmentStorage = AttachmentStorageService();
 
@@ -38,6 +42,8 @@ Future<void> main() async {
     repository: repository,
     attachmentStorage: attachmentStorage,
   );
+
+  await chatBloc.bootstrap();
 
   runApp(MyApp(chatBloc: chatBloc));
 }

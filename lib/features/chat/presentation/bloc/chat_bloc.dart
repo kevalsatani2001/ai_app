@@ -1,7 +1,10 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:my_ai_app/core/config/app_config.dart';
 import 'package:my_ai_app/core/error/failures.dart';
 import 'package:my_ai_app/core/services/attachment_storage_service.dart';
+import 'package:my_ai_app/core/utils/session_title.dart';
 import 'package:my_ai_app/features/chat/domain/entities/chat_message.dart';
+import 'package:my_ai_app/features/chat/domain/entities/chat_session.dart';
 import 'package:my_ai_app/features/chat/domain/repositories/chat_repository.dart';
 import 'package:my_ai_app/features/chat/presentation/bloc/chat_event.dart';
 import 'package:my_ai_app/features/chat/presentation/bloc/chat_state.dart';
@@ -16,40 +19,116 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         _attachmentStorage = attachmentStorage,
         _uuid = uuid,
         super(const ChatInitial()) {
-    on<LoadChatHistory>(_onLoadChatHistory);
+    on<FetchAllSessions>(_onFetchAllSessions);
+    on<CreateNewChat>(_onCreateNewChat);
+    on<LoadChatSession>(_onLoadChatSession);
     on<PickAttachment>(_onPickAttachment);
     on<RemoveSelectedAttachment>(_onRemoveSelectedAttachment);
-    on<SendMultimodalPrompt>(_onSendMultimodalPrompt);
+    on<SendMessage>(_onSendMessage);
     on<ClearChatError>(_onClearChatError);
-    on<ClearChatHistory>(_onClearChatHistory);
+    on<DeleteActiveSession>(_onDeleteActiveSession);
   }
 
   final ChatRepository _repository;
   final AttachmentStorageService _attachmentStorage;
   final Uuid _uuid;
 
+  String? _activeChatId;
+  String _sessionTitle = AppConfig.defaultSessionTitle;
   List<ChatMessage> _messages = const [];
+  List<ChatSessionSummary> _sessions = const [];
 
-  Future<void> _onLoadChatHistory(
-    LoadChatHistory event,
+  /// Bootstraps drawer list + first or latest session.
+  Future<void> bootstrap() async {
+    add(const FetchAllSessions());
+  }
+
+  Future<void> _onFetchAllSessions(
+    FetchAllSessions event,
     Emitter<ChatState> emit,
   ) async {
     emit(const ChatHistoryLoading());
     try {
-      _messages = await _repository.loadChatHistory();
-      emit(
-        ChatStateActive(
-          messages: List<ChatMessage>.unmodifiable(_messages),
-        ),
-      );
+      _sessions = await _repository.fetchAllSessions();
+
+      if (_sessions.isEmpty) {
+        await _createAndActivate(emit);
+        return;
+      }
+
+      final targetId = _activeChatId ?? _sessions.first.chatId;
+      await _loadSessionInternal(targetId, emit);
     } on Failure catch (failure) {
-      emit(ChatStateActive(messages: const [], errorMessage: failure.message));
+      await _emitActive(emit, errorMessage: failure.message);
     } catch (error) {
-      emit(
-        ChatStateActive(
-          messages: const [],
-          errorMessage: 'Unable to load history: $error',
-        ),
+      await _emitActive(
+        emit,
+        errorMessage: 'Unable to load sessions: $error',
+      );
+    }
+  }
+
+  Future<void> _onCreateNewChat(
+    CreateNewChat event,
+    Emitter<ChatState> emit,
+  ) async {
+    final current = state;
+    if (current is ChatStateActive && current.isStreaming) {
+      return;
+    }
+
+    await _createAndActivate(emit);
+  }
+
+  Future<void> _createAndActivate(Emitter<ChatState> emit) async {
+    final chatId = _uuid.v4();
+    try {
+      final session = await _repository.createSession(chatId: chatId);
+      _activeChatId = session.chatId;
+      _sessionTitle = session.title;
+      _messages = const [];
+      _sessions = await _repository.fetchAllSessions();
+      await _emitActive(emit);
+    } on Failure catch (failure) {
+      await _emitActive(emit, errorMessage: failure.message);
+    }
+  }
+
+  Future<void> _onLoadChatSession(
+    LoadChatSession event,
+    Emitter<ChatState> emit,
+  ) async {
+    final current = state;
+    if (current is ChatStateActive && current.isStreaming) {
+      return;
+    }
+
+    emit(const ChatHistoryLoading());
+    await _loadSessionInternal(event.chatId, emit);
+  }
+
+  Future<void> _loadSessionInternal(
+    String chatId,
+    Emitter<ChatState> emit,
+  ) async {
+    try {
+      final session = await _repository.loadSession(chatId);
+      if (session == null) {
+        await _createAndActivate(emit);
+        return;
+      }
+
+      _activeChatId = session.chatId;
+      _sessionTitle = session.title;
+      _messages = List<ChatMessage>.from(session.messages);
+      _sessions = await _repository.fetchAllSessions();
+      await _emitActive(emit);
+    } on Failure catch (failure) {
+      await _emitActive(emit, errorMessage: failure.message);
+    } catch (error) {
+      await _emitActive(
+        emit,
+        errorMessage: 'Unable to load chat: $error',
       );
     }
   }
@@ -99,12 +178,17 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     );
   }
 
-  Future<void> _onSendMultimodalPrompt(
-    SendMultimodalPrompt event,
+  Future<void> _onSendMessage(
+    SendMessage event,
     Emitter<ChatState> emit,
   ) async {
     final current = state;
     if (current is! ChatStateActive || current.isStreaming) {
+      return;
+    }
+
+    final chatId = _activeChatId;
+    if (chatId == null) {
       return;
     }
 
@@ -124,8 +208,19 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     );
     final modelId = _uuid.v4();
 
+    final titleOverride = isDefaultSessionTitle(_sessionTitle) && prompt.isNotEmpty
+        ? deriveSessionTitle(prompt)
+        : null;
+
     try {
-      await _repository.saveMessage(userMessage);
+      await _repository.saveMessage(
+        chatId: chatId,
+        message: userMessage,
+        titleOverride: titleOverride,
+      );
+      if (titleOverride != null) {
+        _sessionTitle = titleOverride;
+      }
     } on Failure catch (failure) {
       emit(current.copyWith(errorMessage: failure.message));
       return;
@@ -144,6 +239,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
     emit(
       ChatStateActive(
+        activeChatId: chatId,
+        sessionTitle: _sessionTitle,
+        sessions: List<ChatSessionSummary>.unmodifiable(_sessions),
         messages: List<ChatMessage>.unmodifiable(_messages),
         selectedFiles: const [],
         isStreaming: true,
@@ -174,6 +272,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
 
         emit(
           ChatStateActive(
+            activeChatId: chatId,
+            sessionTitle: _sessionTitle,
+            sessions: List<ChatSessionSummary>.unmodifiable(_sessions),
             messages: List<ChatMessage>.unmodifiable(_messages),
             isStreaming: true,
             streamingMessageId: modelId,
@@ -181,7 +282,7 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
         );
       }
 
-      await _finalize(emit, modelId);
+      await _finalize(emit, chatId, modelId);
     } catch (error) {
       _messages = List<ChatMessage>.from(_messages)
         ..removeWhere((m) => m.id == modelId);
@@ -189,6 +290,9 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
       final msg = error is Failure ? error.message : '$error';
       emit(
         ChatStateActive(
+          activeChatId: chatId,
+          sessionTitle: _sessionTitle,
+          sessions: List<ChatSessionSummary>.unmodifiable(_sessions),
           messages: List<ChatMessage>.unmodifiable(_messages),
           isStreaming: false,
           errorMessage: msg,
@@ -197,49 +301,69 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
-  Future<void> _finalize(Emitter<ChatState> emit, String modelId) async {
+  Future<void> _finalize(
+    Emitter<ChatState> emit,
+    String chatId,
+    String modelId,
+  ) async {
     final index = _messages.indexWhere((m) => m.id == modelId);
     if (index == -1) {
-      emit(
-        ChatStateActive(
-          messages: List<ChatMessage>.unmodifiable(_messages),
-          isStreaming: false,
-        ),
-      );
+      await _refreshSessionsAndEmit(emit, chatId);
       return;
     }
 
     final modelMsg = _messages[index];
     if (modelMsg.text.trim().isEmpty) {
       _messages = List<ChatMessage>.from(_messages)..removeAt(index);
-      emit(
-        ChatStateActive(
-          messages: List<ChatMessage>.unmodifiable(_messages),
-          isStreaming: false,
-          errorMessage: 'No response from Gemini.',
-        ),
+      await _refreshSessionsAndEmit(
+        emit,
+        chatId,
+        errorMessage: 'No response from Gemini.',
       );
       return;
     }
 
     try {
-      await _repository.saveMessage(modelMsg);
+      await _repository.saveMessage(chatId: chatId, message: modelMsg);
+      _sessions = await _repository.fetchAllSessions();
+      for (final summary in _sessions) {
+        if (summary.chatId == chatId) {
+          _sessionTitle = summary.title;
+          break;
+        }
+      }
     } on Failure catch (failure) {
-      emit(
-        ChatStateActive(
-          messages: List<ChatMessage>.unmodifiable(_messages),
-          isStreaming: false,
-          errorMessage: failure.message,
-        ),
+      await _refreshSessionsAndEmit(
+        emit,
+        chatId,
+        errorMessage: failure.message,
+        isStreaming: false,
       );
       return;
     }
 
+    await _refreshSessionsAndEmit(emit, chatId);
+  }
+
+  Future<void> _refreshSessionsAndEmit(
+    Emitter<ChatState> emit,
+    String chatId, {
+    String? errorMessage,
+    bool isStreaming = false,
+  }) async {
+    try {
+      _sessions = await _repository.fetchAllSessions();
+    } catch (_) {}
+
     emit(
       ChatStateActive(
+        activeChatId: chatId,
+        sessionTitle: _sessionTitle,
+        sessions: List<ChatSessionSummary>.unmodifiable(_sessions),
         messages: List<ChatMessage>.unmodifiable(_messages),
-        isStreaming: false,
+        isStreaming: isStreaming,
         streamingMessageId: null,
+        errorMessage: errorMessage,
       ),
     );
   }
@@ -251,24 +375,53 @@ class ChatBloc extends Bloc<ChatEvent, ChatState> {
     }
   }
 
-  Future<void> _onClearChatHistory(
-    ClearChatHistory event,
+  Future<void> _onDeleteActiveSession(
+    DeleteActiveSession event,
     Emitter<ChatState> emit,
   ) async {
+    final chatId = _activeChatId;
+    if (chatId == null) {
+      return;
+    }
+
     try {
-      await _repository.clearChatHistory();
+      await _repository.deleteSession(chatId);
+      _activeChatId = null;
       _messages = const [];
-      emit(const ChatStateActive(messages: []));
+      _sessions = await _repository.fetchAllSessions();
+
+      if (_sessions.isNotEmpty) {
+        await _loadSessionInternal(_sessions.first.chatId, emit);
+      } else {
+        await _createAndActivate(emit);
+      }
     } on Failure catch (failure) {
-      emit(_active().copyWith(errorMessage: failure.message));
+      await _emitActive(emit, errorMessage: failure.message);
     }
   }
 
-  ChatStateActive _active() {
-    final current = state;
-    if (current is ChatStateActive) {
-      return current;
+  Future<void> _emitActive(
+    Emitter<ChatState> emit, {
+    String? errorMessage,
+    bool isStreaming = false,
+    String? streamingMessageId,
+  }) async {
+    final chatId = _activeChatId;
+    if (chatId == null) {
+      emit(const ChatHistoryLoading());
+      return;
     }
-    return ChatStateActive(messages: List<ChatMessage>.unmodifiable(_messages));
+
+    emit(
+      ChatStateActive(
+        activeChatId: chatId,
+        sessionTitle: _sessionTitle,
+        sessions: List<ChatSessionSummary>.unmodifiable(_sessions),
+        messages: List<ChatMessage>.unmodifiable(_messages),
+        isStreaming: isStreaming,
+        streamingMessageId: streamingMessageId,
+        errorMessage: errorMessage,
+      ),
+    );
   }
 }

@@ -3,10 +3,14 @@ class AppConfig {
 
   static const String geminiModel = 'gemini-2.5-flash';
 
-  /// New box for multimodal messages (avoids corrupting old text-only data).
-  static const String hiveChatBoxName = 'chat_multimodal_v1';
+  /// Multi-chat sessions (each session holds its message list).
+  static const String hiveSessionsBoxName = 'chat_sessions_v1';
 
   static const int chatMessageTypeId = 1;
+  static const int chatSessionTypeId = 2;
+
+  static const String defaultSessionTitle = 'New chat';
+  static const int sessionTitleMaxLength = 48;
 
   static const int maxAttachmentBytes = 20 * 1024 * 1024;
 

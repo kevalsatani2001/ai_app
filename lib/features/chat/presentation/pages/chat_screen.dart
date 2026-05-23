@@ -10,6 +10,7 @@ import 'package:my_ai_app/features/chat/presentation/widgets/ai_status_badge.dar
 import 'package:my_ai_app/features/chat/presentation/widgets/attachment_preview_bar.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/chat_input_panel.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/error_banner.dart';
+import 'package:my_ai_app/features/chat/presentation/widgets/chat_history_drawer.dart';
 import 'package:my_ai_app/features/chat/presentation/widgets/message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -27,7 +28,6 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    context.read<ChatBloc>().add(const LoadChatHistory());
     _textController.addListener(() => setState(() {}));
   }
 
@@ -50,7 +50,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!canSend) {
       return;
     }
-    context.read<ChatBloc>().add(SendMultimodalPrompt(text));
+    context.read<ChatBloc>().add(SendMessage(text));
     _textController.clear();
     _scrollToBottom();
   }
@@ -72,39 +72,60 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
+      drawer: const ChatHistoryDrawer(),
       appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [
-                    AppTheme.userGradientStart,
-                    AppTheme.userGradientEnd,
+        leading: Builder(
+          builder: (ctx) => IconButton(
+            icon: const Icon(Icons.menu_rounded),
+            onPressed: () => Scaffold.of(ctx).openDrawer(),
+          ),
+        ),
+        title: BlocSelector<ChatBloc, ChatState, String>(
+          selector: (s) =>
+              s is ChatStateActive ? s.sessionTitle : 'Gemini Chat',
+          builder: (_, title) => Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [
+                      AppTheme.userGradientStart,
+                      AppTheme.userGradientEnd,
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.auto_awesome_rounded,
+                    color: Colors.white, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 17,
+                      ),
+                    ),
+                    Text(
+                      'Text · Images · PDF · Markdown',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: Colors.white54,
+                      ),
+                    ),
                   ],
                 ),
-                borderRadius: BorderRadius.circular(10),
               ),
-              child: const Icon(Icons.auto_awesome_rounded,
-                  color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Gemini Multimodal',
-                    style: GoogleFonts.inter(
-                        fontWeight: FontWeight.w700, fontSize: 17)),
-                Text(
-                  'Text · Images · PDF · Markdown',
-                  style: GoogleFonts.inter(
-                      fontSize: 11, color: Colors.white54),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
         actions: [
           BlocSelector<ChatBloc, ChatState, bool>(
@@ -121,15 +142,19 @@ class _ChatScreenState extends State<ChatScreen> {
                 context: context,
                 builder: (ctx) => AlertDialog(
                   backgroundColor: AppTheme.surfaceColor,
-                  title: Text('Clear chat?',
+                  title: Text('Delete this chat?',
                       style: GoogleFonts.inter(color: Colors.white)),
+                  content: Text(
+                    'This conversation will be removed from history.',
+                    style: GoogleFonts.inter(color: Colors.white70),
+                  ),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(ctx, false),
                         child: const Text('Cancel')),
                     FilledButton(
                         onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Clear')),
+                        child: const Text('Delete')),
                   ],
                 ),
               );
@@ -137,7 +162,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (!context.mounted) {
                   return;
                 }
-                context.read<ChatBloc>().add(const ClearChatHistory());
+                context.read<ChatBloc>().add(const DeleteActiveSession());
               }
             },
           ),

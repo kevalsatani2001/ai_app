@@ -8,11 +8,26 @@ sealed class ChatEvent extends Equatable {
   List<Object?> get props => [];
 }
 
-final class LoadChatHistory extends ChatEvent {
-  const LoadChatHistory();
+/// Loads every session summary for the navigation drawer.
+final class FetchAllSessions extends ChatEvent {
+  const FetchAllSessions();
 }
 
-/// [type] maps to image vs PDF picker (FileType.custom for PDF).
+/// Starts a blank conversation (ChatGPT "New chat").
+final class CreateNewChat extends ChatEvent {
+  const CreateNewChat();
+}
+
+/// Switches the active thread and loads its messages from Hive.
+final class LoadChatSession extends ChatEvent {
+  const LoadChatSession(this.chatId);
+
+  final String chatId;
+
+  @override
+  List<Object?> get props => [chatId];
+}
+
 final class PickAttachment extends ChatEvent {
   const PickAttachment(this.type);
 
@@ -31,13 +46,23 @@ final class RemoveSelectedAttachment extends ChatEvent {
   List<Object?> get props => [filePath];
 }
 
-final class SendMultimodalPrompt extends ChatEvent {
-  const SendMultimodalPrompt(this.text);
+/// Sends text and/or attachments in the active session.
+final class SendMessage extends ChatEvent {
+  const SendMessage(this.text);
 
   final String text;
 
   @override
   List<Object?> get props => [text];
+}
+
+final class ClearChatError extends ChatEvent {
+  const ClearChatError();
+}
+
+/// Deletes the active session and opens a new empty chat.
+final class DeleteActiveSession extends ChatEvent {
+  const DeleteActiveSession();
 }
 
 final class ReceiveStreamChunk extends ChatEvent {
@@ -47,25 +72,4 @@ final class ReceiveStreamChunk extends ChatEvent {
 
   @override
   List<Object?> get props => [chunk];
-}
-
-final class ChatStreamError extends ChatEvent {
-  const ChatStreamError(this.error);
-
-  final String error;
-
-  @override
-  List<Object?> get props => [error];
-}
-
-final class ClearChatError extends ChatEvent {
-  const ClearChatError();
-}
-
-final class ClearChatHistory extends ChatEvent {
-  const ClearChatHistory();
-}
-
-final class StreamCompleted extends ChatEvent {
-  const StreamCompleted();
 }

@@ -2,6 +2,7 @@ import 'package:my_ai_app/core/error/failures.dart';
 import 'package:my_ai_app/features/chat/data/datasources/chat_local_datasource.dart';
 import 'package:my_ai_app/features/chat/data/datasources/gemini_remote_service.dart';
 import 'package:my_ai_app/features/chat/domain/entities/chat_message.dart';
+import 'package:my_ai_app/features/chat/domain/entities/chat_session.dart';
 import 'package:my_ai_app/features/chat/domain/repositories/chat_repository.dart';
 
 class ChatRepositoryImpl implements ChatRepository {
@@ -15,13 +16,34 @@ class ChatRepositoryImpl implements ChatRepository {
   final GeminiRemoteService _remote;
 
   @override
-  Future<List<ChatMessage>> loadChatHistory() => _local.fetchAllMessagesSorted();
+  Future<List<ChatSessionSummary>> fetchAllSessions() =>
+      _local.fetchAllSessionSummaries();
 
   @override
-  Future<void> saveMessage(ChatMessage message) => _local.saveMessage(message);
+  Future<ChatSession> createSession({required String chatId}) =>
+      _local.createSession(chatId: chatId);
 
   @override
-  Future<void> clearChatHistory() => _local.clearAllMessages();
+  Future<ChatSession?> loadSession(String chatId) =>
+      _local.fetchSession(chatId);
+
+  @override
+  Future<void> saveMessage({
+    required String chatId,
+    required ChatMessage message,
+    String? titleOverride,
+  }) =>
+      _local.saveMessage(
+        chatId: chatId,
+        message: message,
+        titleOverride: titleOverride,
+      );
+
+  @override
+  Future<void> deleteSession(String chatId) => _local.deleteSession(chatId);
+
+  @override
+  Future<void> clearAllSessions() => _local.clearAllSessions();
 
   @override
   Stream<String> sendMultimodalStream({
